@@ -34,8 +34,8 @@ async function getAccessToken() {
 export async function POST({ request }) {
     try {
         const rawData = await request.json(); // Dados frontend
-        const token = await getAccessToken();
-
+        
+        // Construir payload da Rede
         const payloadRede = {
             capture: rawData.capture,
             kind: rawData.kind,
@@ -50,8 +50,7 @@ export async function POST({ request }) {
             affiliation: AFFILIATION
         };
 
-        // parcelas e recorrência se for CRÉDITO
-
+        // Parcelas e recorrência se for CRÉDITO
         if (rawData.kind === "credit") {
             payloadRede.installments = rawData.installments;
 
@@ -66,6 +65,8 @@ export async function POST({ request }) {
                 };
             }
         }
+
+        const token = await getAccessToken();
 
         console.log("PAYLOAD ENVIADO PARA A REDE:", JSON.stringify(payloadRede));
 

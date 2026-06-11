@@ -4,15 +4,16 @@
   let kind = $state("credit");
   let cardholderName = $state("");
   let cardNumber = $state("");
-  let expirationMonth = $state("");
-  let expirationYear = $state("");
   let securityCode = $state("");
-  let amount = $state("");
+  let amountRaw = $state(""); // valor numérico interno (string com dígitos)
   let installments = $state(1);
   let capture = $state(true);
   let loading = $state(false);
   let resultado = $state(null);
   let erro = $state(null);
+  let showConfirmationScreen = $state(false);
+  let showDetails = $state(false);
+  let tentativas = $state(0);
 
   // Recorrência
   let isRecorrente = $state(false);
@@ -25,37 +26,194 @@
     voucher: "4389357063526690"
   };
 
-  function formatarCartao(value) {
-    return value.replace(/\D/g, "").replace(/(.{4})/g, "$1 ").trim().slice(0, 19);
+  // Bandeira do cartão 
+  function detectarBandeira(numero) {
+    const n = numero.replace(/\s/g, "");
+    if (/^4/.test(n)) return "visa";
+    if (/^5[1-5]/.test(n) || /^2(2[2-9][1-9]|[3-6]\d{2}|7[01]\d|720)/.test(n)) return "mastercard";
+    if (/^3[47]/.test(n)) return "amex";
+    if (/^(636368|438935|504175|451416|636297|5067|4576|4011|506699)/.test(n)) return "elo";
+    if (/^(60110|6012|6034[0-4]|6035|6036|6038|6039|604|6041|6042|6043|60458|60460|6047|6048|6049|605|6050|6051|6052|6053|6054|6055|6056|60570|6057[1-9]|6058|6059|606|6060|60612|60613|60614|60615|60616|60617|60618|60619|6062|6063|6064|6065|6066|6067|6068|6069|607|6070|6071|6072|6073|6074|6075|6076|6077|6078|6079|608|6080|60801|60802|60803|60804|60805|60806|60807|60808|60809|6081|6082|6083|6084|6085|6086|6087|6088|6089|609)/.test(n)) return "hipercard";
+    if (/^30[0-5]/.test(n) || /^36/.test(n) || /^38/.test(n)) return "diners";
+    return null;
   }
 
- async function pagar() {
-  loading = true;
-  try {
-    // Enviamos apenas os dados brutos
-    const dadosParaOBackend = {
-      kind,
-      amount: parseFloat(amount), // Valor em reais (ex: 200.00)
-      installments: parseInt(installments),
-      cardholderName,
-      cardNumber: cardNumber.replace(/\s/g, ""),
-      expirationMonth: parseInt(expirationMonth),
-      expirationYear: parseInt(expirationYear),
-      securityCode,
-      capture,
-      isRecorrente,
-      frequencia,
-      totalCobrancas
-    };
+  let bandeira = $derived(detectarBandeira(cardNumber));
 
-    resultado = await criarTransacao(dadosParaOBackend);
-  } catch (e) {
-    erro = e.message;
-  } finally {
-    loading = false;
+  const logoBandeira = {
+    visa: `<svg viewBox="0 0 48 16" xmlns="http://www.w3.org/2000/svg" width="38" height="13"><text x="0" y="13" font-family="Arial" font-weight="900" font-size="14" fill="#1a1f71" letter-spacing="-0.5">VISA</text></svg>`,
+    mastercard: `<svg viewBox="0 0 38 24" xmlns="http://www.w3.org/2000/svg" width="36" height="22"><circle cx="14" cy="12" r="10" fill="#EB001B"/><circle cx="24" cy="12" r="10" fill="#F79E1B"/><path d="M19 5.27A10 10 0 0 1 23 12a10 10 0 0 1-4 6.73A10 10 0 0 1 15 12a10 10 0 0 1 4-6.73z" fill="#FF5F00"/></svg>`,
+    amex: `<svg viewBox="0 0 48 16" xmlns="http://www.w3.org/2000/svg" width="38" height="13"><text x="0" y="13" font-family="Arial" font-weight="900" font-size="11" fill="#007bc1" letter-spacing="0.5">AMEX</text></svg>`,
+    elo: `<svg viewBox="0 0 48 16" xmlns="http://www.w3.org/2000/svg" width="32" height="13"><text x="0" y="13" font-family="Arial" font-weight="900" font-size="14" fill="#00A4E0" letter-spacing="-0.5">elo</text></svg>`,
+    hipercard: `<svg viewBox="0 0 60 16" xmlns="http://www.w3.org/2000/svg" width="52" height="13"><text x="0" y="13" font-family="Arial" font-weight="900" font-size="11" fill="#B3131B" letter-spacing="0.2">HIPER</text></svg>`,
+    diners: `<svg viewBox="0 0 60 16" xmlns="http://www.w3.org/2000/svg" width="52" height="13"><text x="0" y="13" font-family="Arial" font-weight="700" font-size="10" fill="#004A97" letter-spacing="0.2">DINERS</text></svg>`,
+  };
+
+  //  Máscara de moeda
+  function formatarMoeda(digitos) {
+    if (!digitos) return "";
+    const num = parseInt(digitos, 10);
+    if (isNaN(num)) return "";
+    return (num / 100).toFixed(2).replace(".", ",").replace(/\B(?=(\d{3})+(?!\d))/g, ".");
   }
-}
 
+  let amountDisplay = $derived(formatarMoeda(amountRaw));
+  let amountFloat = $derived(amountRaw ? parseInt(amountRaw, 10) / 100 : 0);
+
+  let opcoesParcelamento = $derived(
+    Array.from({ length: 12 }, (_, i) => {
+      const n = i + 1;
+      if (!amountFloat || amountFloat <= 0) return { value: n, label: `${n}x` };
+      const v = (amountFloat / n).toFixed(2).replace(".", ",").replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+      return { value: n, label: `${n}x  R$ ${v}` };
+    })
+  );
+
+  // Formatadores 
+  function formatarCartao(v) {
+    return v.replace(/\D/g, "").slice(0, 16).replace(/(\d{4})(?=\d)/g, "$1 ").trim();
+  }
+  function filtrarNome(v) {
+    return v.toUpperCase().replace(/[^A-Z\s]/g, "").slice(0, 26);
+  }
+  function filtrarCVV(v) {
+    return v.replace(/\D/g, "").slice(0, 4);
+  }
+
+  // Handlers 
+  function onCardNumberInput(e) {
+    const formatted = formatarCartao(e.target.value);
+    cardNumber = formatted;
+    e.target.value = formatted;
+    erro = null;
+  }
+
+  function onNomeInput(e) {
+    const filtered = filtrarNome(e.target.value);
+    cardholderName = filtered;
+    e.target.value = filtered;
+    erro = null;
+  }
+
+  let expirationMonth = $state("");
+  let expirationYear = $state("");
+  let expirationDisplay = $state("");
+
+  function onExpirationInput(e) {
+    const raw = e.target.value.replace(/\D/g, "").slice(0, 4);
+    let formatted = raw;
+    if (raw.length >= 3) {
+      formatted = raw.slice(0, 2) + "/" + raw.slice(2);
+    }
+    if (raw.length >= 2) {
+      const m = parseInt(raw.slice(0, 2));
+      if (m < 1) formatted = "01" + (raw.length >= 3 ? "/" + raw.slice(2) : "");
+      if (m > 12) formatted = "12" + (raw.length >= 3 ? "/" + raw.slice(2) : "");
+    }
+    expirationDisplay = formatted;
+    e.target.value = formatted;
+    if (raw.length >= 2) expirationMonth = raw.slice(0, 2);
+    if (raw.length === 4) expirationYear = "20" + raw.slice(2);
+    erro = null;
+  }
+
+  function onCVVInput(e) {
+    const filtered = filtrarCVV(e.target.value);
+    securityCode = filtered;
+    e.target.value = filtered;
+    erro = null;
+  }
+
+  function onAmountInput(e) {
+    const digitos = e.target.value.replace(/\D/g, "").replace(/^0+/, "") || "";
+    amountRaw = digitos;
+    e.target.value = amountDisplay;
+    erro = null;
+  }
+
+  function onInstallmentsChange(e) {
+    installments = parseInt(e.target.value);
+    if (installments > 1) isRecorrente = false;
+  }
+
+  function onFrequenciaChange(e) {
+    frequencia = e.target.value;
+  }
+
+  function onTotalCobrancasInput(e) {
+    totalCobrancas = parseInt(e.target.value) || 1;
+  }
+
+  function onCaptureChange(e) {
+    capture = e.target.checked;
+  }
+
+  function onRecorrenteChange(e) {
+    isRecorrente = e.target.checked;
+    if (isRecorrente) installments = 1;
+  }
+
+  // Preencher dados de teste
+  function preencherTeste() {
+    cardNumber        = formatarCartao(cartoesTeste[kind]);
+    expirationDisplay = "01/35";
+    expirationMonth   = "01";
+    expirationYear    = "2035";
+    securityCode      = "123";
+    cardholderName    = "JOAO DA SILVA";
+    erro = null;
+  }
+
+  // Timeout helper 
+  function comTimeout(promise, ms) {
+    const timeout = new Promise((_, reject) =>
+      setTimeout(() => reject(new Error("Tempo limite atingido. Tente novamente.")), ms)
+    );
+    return Promise.race([promise, timeout]);
+  }
+
+  // Pagamento 
+  async function pagar() {
+    resultado = null;
+    erro = null;
+    loading = true;
+
+    try {
+      resultado = await comTimeout(
+        criarTransacao({
+          kind,
+          amount: amountFloat,
+          installments: parseInt(installments),
+          cardholderName,
+          cardNumber: cardNumber.replace(/\s/g, ""),
+          expirationMonth: parseInt(expirationMonth),
+          expirationYear: parseInt(expirationYear),
+          securityCode,
+          capture,
+          isRecorrente,
+          frequencia,
+          totalCobrancas
+        }),
+        7000
+      );
+      tentativas = 0;
+      showConfirmationScreen = true;
+    } catch (e) {
+      tentativas += 1;
+      erro = e.message;
+      showConfirmationScreen = true;
+    } finally {
+      loading = false;
+    }
+  }
+
+  function tentarNovamente() {
+    showConfirmationScreen = false;
+    resultado = null;
+    erro = null;
+    showDetails = false;
+    pagar();
+  }
 </script>
 
 <div class="page">
@@ -80,231 +238,333 @@
       </div>
     </div>
 
-    <!-- Tipo de pagamento -->
-    <div class="tipo-tabs">
-      {#each [["credit","Crédito"],["debit","Débito"],["voucher","Voucher"]] as [val, label]}
-        <button
-          type="button"
-          class="tab {kind === val ? 'ativo' : ''}"
-          onclick={() => { kind = val; isRecorrente = false; }}
-        >{label}</button>
-      {/each}
-    </div>
-
-    <!-- Total a pagar -->
-    <div class="total-box">
-      <div class="total-left">
-        <div class="total-label">TOTAL A PAGAR</div>
-        <div class="total-valor">R$ {amount ? parseFloat(amount).toFixed(2).replace('.', ',') : '0,00'}</div>
+    {#if !showConfirmationScreen}
+      <!-- Tipo de pagamento -->
+      <div class="tipo-tabs">
+        {#each [["credit","Crédito"],["debit","Débito"],["voucher","Voucher"]] as [val, label]}
+          <button
+            type="button"
+            class="tab {kind === val ? 'ativo' : ''}"
+            onclick={() => { kind = val; isRecorrente = false; }}
+          >{label}</button>
+        {/each}
       </div>
-      <div class="total-right">
-        <div class="total-label">CARTÃO</div>
-        <div class="total-cartao">{cardNumber || "•••• •••• •••• ••••"}</div>
-      </div>
-    </div>
 
-    <!-- Formulário -->
-    <form onsubmit={(e) => { e.preventDefault(); pagar(); }}>
-
-      <div class="campo">
-        <label for="numero">Número do cartão</label>
-        <div class="input-icon">
-          <input
-            id="numero"
-            value={cardNumber}
-            oninput={(e) => cardNumber = formatarCartao(e.target.value)}
-            placeholder="0000 0000 0000 0000"
-            maxlength="19"
-            required
-          />
-          <span class="icon">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-              <rect x="1" y="4" width="22" height="16" rx="2" ry="2"/>
-              <line x1="1" y1="10" x2="23" y2="10"/>
-            </svg>
-          </span>
+      <!-- Total a pagar -->
+      <div class="total-box">
+        <div class="total-left">
+          <div class="total-label">TOTAL A PAGAR</div>
+          <div class="total-valor">R$ {amountDisplay || '0,00'}</div>
+        </div>
+        <div class="total-right">
+          <div class="total-label">CARTÃO</div>
+          <div class="total-cartao-row">
+            {#if bandeira && logoBandeira[bandeira]}
+              <span class="bandeira-logo">{@html logoBandeira[bandeira]}</span>
+            {/if}
+            <span class="total-cartao">{cardNumber || "•••• •••• •••• ••••"}</span>
+          </div>
         </div>
       </div>
 
-      <div class="campo">
-        <label for="nome">Nome no cartão</label>
-        <input
-          id="nome"
-          bind:value={cardholderName}
-          placeholder="Como escrito no cartão"
-          required
-        />
-      </div>
+      <!-- Formulário -->
+      <form onsubmit={(e) => { e.preventDefault(); pagar(); }}>
 
-      <div class="row-3">
-        <div class="campo campo-small">
-          <label for="mes">Mês</label>
-          <input id="mes" bind:value={expirationMonth} placeholder="MM" maxlength="2" required />
-        </div>
-        <div class="campo campo-small">
-          <label for="ano">Ano</label>
-          <input id="ano" bind:value={expirationYear} placeholder="AAAA" maxlength="4" required />
-        </div>
         <div class="campo">
-          <label for="cvv">CVV</label>
+          <label for="numero">Número do cartão</label>
           <div class="input-icon">
-            <input id="cvv" bind:value={securityCode} placeholder="•••" maxlength="4" required />
-            <span class="icon">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-                <circle cx="12" cy="12" r="10"/>
-                <line x1="12" y1="8" x2="12" y2="12"/>
-                <line x1="12" y1="16" x2="12.01" y2="16"/>
-              </svg>
+            <input
+              id="numero"
+              value={cardNumber}
+              oninput={onCardNumberInput}
+              placeholder="0000 0000 0000 0000"
+              maxlength="19"
+              autocomplete="cc-number"
+              inputmode="numeric"
+              required
+            />
+            <span class="icon icon-bandeira">
+              {#if bandeira && logoBandeira[bandeira]}
+                {@html logoBandeira[bandeira]}
+              {:else}
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                  <rect x="1" y="4" width="22" height="16" rx="2" ry="2"/>
+                  <line x1="1" y1="10" x2="23" y2="10"/>
+                </svg>
+              {/if}
             </span>
           </div>
         </div>
-      </div>
 
-      <div class="row-2">
         <div class="campo">
-          <label for="valor">Valor (R$)</label>
+          <label for="nome">Nome no cartão</label>
           <input
-            id="valor"
-            bind:value={amount}
-            type="number"
-            step="0.01"
-            min="0.01"
-            placeholder="0,00"
+            id="nome"
+            value={cardholderName}
+            oninput={onNomeInput}
+            placeholder="Como escrito no cartão"
+            autocomplete="cc-name"
             required
           />
         </div>
 
-        {#if kind === "credit"}
+        <div class="row-2">
           <div class="campo">
-            <label for="parcelas">Parcelas</label>
-            <select id="parcelas" bind:value={installments}>
-              {#each Array(12) as _, i}
-                <option value={i + 1}>{i + 1}x sem juros</option>
-              {/each}
-            </select>
+            <label for="validade">Validade</label>
+            <input
+              id="validade"
+              value={expirationDisplay}
+              oninput={onExpirationInput}
+              type="text"
+              inputmode="numeric"
+              placeholder="MM/AA"
+              maxlength="5"
+              autocomplete="cc-exp"
+              required
+            />
           </div>
-        {/if}
-      </div>
+          <div class="campo campo-cvv">
+            <label for="cvv">CVV</label>
+            <div class="input-icon">
+              <input
+                id="cvv"
+                value={securityCode}
+                oninput={onCVVInput}
+                type="text"
+                inputmode="numeric"
+                placeholder="•••"
+                maxlength="4"
+                autocomplete="cc-csc"
+                required
+              />
+              <span class="icon">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                  <circle cx="12" cy="12" r="10"/>
+                  <line x1="12" y1="8" x2="12" y2="12"/>
+                  <line x1="12" y1="16" x2="12.01" y2="16"/>
+                </svg>
+              </span>
+            </div>
+          </div>
+        </div>
 
-      <!-- Recorrência — só crédito -->
-      {#if kind === "credit"}
-        <div class="recorrencia-row">
-          <div class="recorrencia-row-left">
-            <span class="recorrencia-icon">
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"/>
-              </svg>
-            </span>
-            <span>Cobrança recorrente</span>
+        <div class="row-2">
+          <div class="campo">
+            <label for="valor">Valor</label>
+            <div class="input-prefix-wrap">
+              <span class="input-prefix">R$</span>
+              <input
+                id="valor"
+                value={amountDisplay}
+                oninput={onAmountInput}
+                type="text"
+                inputmode="numeric"
+                placeholder="0,00"
+                required
+                class="input-com-prefix"
+              />
+            </div>
           </div>
-          <label class="toggle-label">
-            <input type="checkbox" bind:checked={isRecorrente} />
-            <span class="toggle-slider"></span>
+
+          {#if kind === "credit"}
+            <div class="campo">
+              <label for="parcelas">Parcelas</label>
+              <select
+                id="parcelas"
+                value={installments}
+                onchange={onInstallmentsChange}
+                disabled={isRecorrente}
+                title={isRecorrente ? "Desative a recorrência para parcelar" : ""}
+              >
+                {#each opcoesParcelamento as op}
+                  <option value={op.value}>{op.label}</option>
+                {/each}
+              </select>
+              {#if isRecorrente}
+                <span class="campo-hint">Indisponível com recorrência ativa</span>
+              {/if}
+            </div>
+          {/if}
+        </div>
+
+        <!-- Recorrência — só crédito -->
+        {#if kind === "credit"}
+          <div class="recorrencia-row">
+            <div class="recorrencia-row-left">
+              <span class="recorrencia-icon">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"/>
+                </svg>
+              </span>
+              <span>Cobrança recorrente</span>
+            </div>
+            <label class="toggle-label">
+              <input type="checkbox" checked={isRecorrente} onchange={onRecorrenteChange} />
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+
+          {#if isRecorrente}
+            <div class="recorrencia-box">
+              <div class="row-2">
+                <div class="campo">
+                  <label for="freq">Frequência</label>
+                  <select id="freq" value={frequencia} onchange={onFrequenciaChange}>
+                    <option value="Daily">Diária</option>
+                    <option value="Weekly">Semanal</option>
+                    <option value="Monthly">Mensal</option>
+                    <option value="Yearly">Anual</option>
+                  </select>
+                </div>
+                <div class="campo">
+                  <label for="total">Nº de cobranças</label>
+                  <input
+                    id="total"
+                    value={totalCobrancas}
+                    oninput={onTotalCobrancasInput}
+                    type="number"
+                    min="1"
+                    max="99"
+                    placeholder="12"
+                  />
+                </div>
+              </div>
+              <p class="recorrencia-info">
+                💡 Será cobrado <strong>R$ {amountDisplay || '0,00'}</strong> a cada
+                <strong>{frequencia === "Daily" ? "dia" : frequencia === "Weekly" ? "semana" : frequencia === "Monthly" ? "mês" : "ano"}</strong>,
+                por <strong>{totalCobrancas} cobranças</strong>.
+              </p>
+            </div>
+          {/if}
+        {/if}
+
+        <!-- Captura automática -->
+        <div class="captura-row">
+          <label class="check-label">
+            <input type="checkbox" checked={capture} onchange={onCaptureChange} />
+            <span>Capturar automaticamente</span>
           </label>
         </div>
 
-        {#if isRecorrente}
-          <div class="recorrencia-box">
-            <div class="row-2">
-              <div class="campo">
-                <label for="freq">Frequência</label>
-                <select id="freq" bind:value={frequencia}>
-                  <option value="Daily">Diária</option>
-                  <option value="Weekly">Semanal</option>
-                  <option value="Monthly">Mensal</option>
-                  <option value="Yearly">Anual</option>
-                </select>
-              </div>
-              <div class="campo">
-                <label for="total">Nº de cobranças</label>
-                <input
-                  id="total"
-                  bind:value={totalCobrancas}
-                  type="number"
-                  min="1"
-                  max="99"
-                  placeholder="12"
-                />
-              </div>
-            </div>
-            <p class="recorrencia-info">
-              💡 Será cobrado <strong>R$ {amount || "0,00"}</strong> a cada
-              <strong>{frequencia === "Daily" ? "dia" : frequencia === "Weekly" ? "semana" : frequencia === "Monthly" ? "mês" : "ano"}</strong>,
-              por <strong>{totalCobrancas} cobranças</strong>.
-            </p>
-          </div>
-        {/if}
-      {/if}
+        <!-- Sandbox helper -->
+        <button
+          type="button"
+          class="btn-sandbox"
+          onclick={preencherTeste}
+        >
+          ⚡ Preencher com dados de teste
+        </button>
 
-      <!-- Captura automática -->
-      <div class="captura-row">
-        <label class="check-label">
-          <input type="checkbox" bind:checked={capture} />
-          <span>Capturar automaticamente</span>
-        </label>
-      </div>
+        <button type="submit" class="btn-pagar" disabled={loading}>
+          {#if loading}
+            <span class="spinner"></span> Processando...
+          {:else}
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
+              <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+            </svg>
+            Pagar agora
+          {/if}
+        </button>
 
-      <!-- Sandbox helper -->
-      <button
-        type="button"
-        class="btn-sandbox"
-        onclick={() => {
-          cardNumber = cartoesTeste[kind];
-          expirationMonth = "01";
-          expirationYear = "2035";
-          securityCode = "123";
-          cardholderName = "JOAO DA SILVA";
-        }}
-      >
-        ⚡ Preencher com dados de teste
-      </button>
-
-      <button type="submit" class="btn-pagar" disabled={loading}>
-        {#if loading}
-          <span class="spinner"></span> Processando...
-        {:else}
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+        <div class="rodape-ssl">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
             <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
           </svg>
-          Pagar agora
-        {/if}
-      </button>
-
-      <div class="rodape-ssl">
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
-          <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
-        </svg>
-        Transação criptografada via SSL. Dados protegidos.
-      </div>
-
-    </form>
-
-    <!-- Resultado -->
-    {#if resultado}
-      <div class="resultado sucesso">
-        <div class="resultado-header">
-          <span class="resultado-icon">✅</span>
-          <div>
-            <strong>{resultado.returnMessage}</strong>
-            <span class="resultado-code">Código {resultado.returnCode}</span>
-          </div>
+          Transação criptografada via SSL. Dados protegidos.
         </div>
-        <div class="resultado-detalhes">
-          <div class="detalhe"><span>TID</span><strong>{resultado.tid}</strong></div>
-          <div class="detalhe"><span>NSU</span><strong>{resultado.nsu}</strong></div>
-          <div class="detalhe"><span>Autorização</span><strong>{resultado.authorizationCode}</strong></div>
-          <div class="detalhe"><span>Valor</span><strong>R$ {(resultado.amount / 100).toFixed(2)}</strong></div>
-          <div class="detalhe"><span>Cartão</span><strong>•••• {resultado.last4}</strong></div>
-        </div>
-      </div>
+
+      </form>
     {/if}
 
-    {#if erro}
-      <div class="resultado erro">
-        <span class="resultado-icon">❌</span>
-        <span>{erro}</span>
+    <!-- Tela de confirmação -->
+    {#if showConfirmationScreen}
+      <div class="confirmation-screen">
+        <div class="confirmation-icon {resultado ? 'success' : 'failure'}">
+          {#if resultado}
+            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#22c55e" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path>
+              <polyline points="22 4 12 14.01 9 11.01"></polyline>
+            </svg>
+          {:else}
+            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#ef4444" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="10"></circle>
+              <line x1="15" y1="9" x2="9" y2="15"></line>
+              <line x1="9" y1="9" x2="15" y2="15"></line>
+            </svg>
+          {/if}
+        </div>
+
+        <div class="confirmation-message">
+          {resultado ? "Pagamento aprovado" : "Pagamento negado"}
+        </div>
+
+        {#if resultado}
+          <div class="confirmation-valor">
+            R$ {(resultado.amount / 100).toFixed(2).replace(".", ",").replace(/\B(?=(\d{3})+(?!\d))/g, ".")}
+          </div>
+          {#if bandeira && logoBandeira[bandeira]}
+            <div class="confirmation-bandeira">
+              {@html logoBandeira[bandeira]}
+              <span class="confirmation-card-final">•••• {resultado.last4}</span>
+            </div>
+          {:else}
+            <div class="confirmation-card-info">Cartão •••• {resultado.last4}</div>
+          {/if}
+        {:else if erro}
+          <div class="confirmation-erro-msg">{erro}</div>
+        {/if}
+
+        <button type="button" class="btn-details" onclick={() => showDetails = !showDetails}>
+          Detalhes
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class:rotate={showDetails}>
+            <polyline points="6 9 12 15 18 9"></polyline>
+          </svg>
+        </button>
+
+        {#if showDetails}
+          <div class="resultado-detalhes expanded">
+            {#if resultado}
+              <div class="detalhe"><span>TID</span><strong>{resultado.tid}</strong></div>
+              <div class="detalhe"><span>NSU</span><strong>{resultado.nsu}</strong></div>
+              <div class="detalhe"><span>Autorização</span><strong>{resultado.authorizationCode}</strong></div>
+              <div class="detalhe"><span>Valor</span><strong>R$ {(resultado.amount / 100).toFixed(2).replace(".", ",")}</strong></div>
+              <div class="detalhe"><span>Cartão</span><strong>•••• {resultado.last4}</strong></div>
+            {:else if erro}
+              <div class="detalhe full-width"><span>Erro</span><strong>{erro}</strong></div>
+            {/if}
+          </div>
+        {/if}
+
+        <div class="confirmation-actions">
+          {#if !resultado && tentativas < 3}
+            <button
+              type="button"
+              class="btn-retry"
+              onclick={tentarNovamente}
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"/>
+              </svg>
+              Tentar novamente ({3 - tentativas} restante{3 - tentativas !== 1 ? 's' : ''})
+            </button>
+          {/if}
+
+          <button
+            type="button"
+            class="btn-continuar"
+            onclick={() => {
+              showConfirmationScreen = false;
+              resultado = null;
+              erro = null;
+              showDetails = false;
+              tentativas = 0;
+            }}
+          >
+            {resultado ? "Concluir" : "Voltar ao formulário"}
+          </button>
+        </div>
       </div>
     {/if}
 
@@ -403,16 +663,19 @@
   }
 
   /* Total box */
-  .total-box {
-    background: #f9fafb;
-    border: 1.5px solid #f3f4f6;
-    border-radius: 10px;
-    padding: 0.9rem 1rem;
-    display: flex;
-    justify-content: space-between;
-    align-items: flex-end;
-    margin-bottom: 1.25rem;
-  }
+ .total-box {
+  background: #f9fafb;
+  border: 1.5px solid #f3f4f6;
+  border-radius: 10px;
+  padding: 0.9rem 1rem;
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+   align-items: center;
+  margin-bottom: 1.25rem;
+  gap: 0.5rem;
+  flex-wrap: nowrap;
+}
   .total-label {
     font-size: 0.65rem;
     font-weight: 600;
@@ -421,21 +684,42 @@
     text-transform: uppercase;
     margin-bottom: 0.2rem;
   }
-  .total-valor {
-    font-size: 1.35rem;
-    font-weight: 700;
-    color: #111827;
-    line-height: 1;
-  }
+  .total-left {
+  flex-shrink: 0;
+  min-width: 0;
+}
+ .total-valor {
+  font-size: 1.15rem;   /* era 1.35rem */
+  font-weight: 700;
+  color: #111827;
+  line-height: 1;
+  white-space: nowrap;
+}
   .total-right {
-    text-align: right;
-  }
+  text-align: right;
+  flex-shrink: 0;
+  max-width: 55%;
+}
+  .total-cartao-row {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+  flex-wrap: nowrap;
+}
   .total-cartao {
-    font-size: 0.8rem;
-    color: #374151;
-    font-family: monospace;
-    letter-spacing: 0.12em;
-    font-weight: 500;
+  font-size: 0.68rem;  /* era 0.72rem */
+  color: #374151;
+  font-family: monospace;
+  letter-spacing: 0.03em;  /* era 0.05em */
+  font-weight: 500;
+  white-space: nowrap;
+}
+  .bandeira-logo {
+    display: flex;
+    align-items: center;
+    line-height: 1;
+    flex-shrink: 0;
   }
 
   /* Campos */
@@ -462,6 +746,8 @@
     background: white;
     transition: border-color 0.15s, box-shadow 0.15s;
     outline: none;
+    width: 100%;
+    box-sizing: border-box;
   }
   .campo input::placeholder {
     color: #9ca3af;
@@ -470,14 +756,70 @@
     border-color: #0ea5e9;
     box-shadow: 0 0 0 3px rgba(14,165,233,0.12);
   }
+  .campo select:disabled {
+    background: #f3f4f6;
+    color: #9ca3af;
+    cursor: not-allowed;
+    opacity: 1;
+  }
+  .campo-hint {
+    font-size: 0.7rem;
+    color: #f59e0b;
+    font-weight: 500;
+    display: flex;
+    align-items: center;
+    gap: 3px;
+  }
+  .campo-hint::before {
+    content: "⚠";
+    font-size: 0.65rem;
+  }
+
+  /* Prefixo R$ fixo */
+  .input-prefix-wrap {
+    display: flex;
+    align-items: center;
+    border: 1.5px solid #e5e7eb;
+    border-radius: 8px;
+    overflow: hidden;
+    transition: border-color 0.15s, box-shadow 0.15s;
+    background: white;
+  }
+  .input-prefix-wrap:focus-within {
+    border-color: #0ea5e9;
+    box-shadow: 0 0 0 3px rgba(14,165,233,0.12);
+  }
+  .input-prefix {
+    padding: 0.6rem 0.6rem 0.6rem 0.85rem;
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: #6b7280;
+    background: #f9fafb;
+    border-right: 1.5px solid #e5e7eb;
+    white-space: nowrap;
+    user-select: none;
+    line-height: 1;
+  }
+  .input-com-prefix {
+    border: none !important;
+    box-shadow: none !important;
+    border-radius: 0 !important;
+    flex: 1;
+    min-width: 0;
+    padding: 0.6rem 0.85rem !important;
+    outline: none;
+    font-size: 0.9rem;
+    font-family: 'Inter', sans-serif;
+    color: #111827;
+    background: white;
+    width: 100%;
+  }
 
   .input-icon {
     position: relative;
   }
   .input-icon input {
-    width: 100%;
-    padding-right: 2.5rem;
-    box-sizing: border-box;
+    padding-right: 2.8rem;
   }
   .input-icon .icon {
     position: absolute;
@@ -489,16 +831,20 @@
     align-items: center;
     pointer-events: none;
   }
+  .icon-bandeira {
+    right: 0.6rem;
+  }
 
-  .row-3 { display: flex; gap: 0.6rem; }
-  .row-3 .campo { flex: 1; }
- .row-3 .campo-small {
-  flex:  0.25px !important;
-  width: 60px;
-}
-  .row-2 { display: flex; gap: 0.6rem; }
-  .row-2 .campo {flex:  0.25px !important;
-  width: 60px; }
+  /* Linha Valor / Parcelas */
+  .row-2 {
+    display: flex;
+    gap: 0.6rem;
+    align-items: flex-start;
+  }
+  .row-2 .campo {
+    flex: 1;
+    min-width: 0;
+  }
 
   /* Recorrência row */
   .recorrencia-row {
@@ -656,56 +1002,170 @@
     text-align: center;
   }
 
-  /* Resultado */
-  .resultado {
-    margin-top: 1.25rem;
-    border-radius: 10px;
-    padding: 1rem;
+  /* Tela de confirmação */
+  .confirmation-screen {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 2rem 1rem;
+    text-align: center;
   }
-  .resultado.sucesso {
-    background: #f0fdf4;
-    border: 1.5px solid #bbf7d0;
-  }
-  .resultado.erro {
-    background: #fef2f2;
-    border: 1.5px solid #fecaca;
+
+  .confirmation-icon {
+    margin-bottom: 1.5rem;
+    width: 80px;
+    height: 80px;
+    border-radius: 50%;
     display: flex;
     align-items: center;
-    gap: 0.5rem;
-    color: #dc2626;
+    justify-content: center;
+  }
+  .confirmation-icon.success { background: #ecfdf5; }
+  .confirmation-icon.failure { background: #fef2f2; }
+
+  .confirmation-message {
+    font-size: 1.75rem;
+    font-weight: 700;
+    color: #111827;
+    margin-bottom: 0.5rem;
+  }
+
+  .confirmation-valor {
+    font-size: 1.6rem;
+    font-weight: 700;
+    color: #16a34a;
+    letter-spacing: -0.01em;
+    margin-bottom: 0.5rem;
+    line-height: 1;
+  }
+
+  .confirmation-bandeira {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 1.25rem;
+    justify-content: center;
+  }
+  .confirmation-card-final {
+    font-size: 0.85rem;
+    color: #6b7280;
+    font-family: monospace;
+    letter-spacing: 0.08em;
+  }
+  .confirmation-card-info {
+    font-size: 0.85rem;
+    color: #6b7280;
+    margin-bottom: 1.25rem;
+    font-family: monospace;
+  }
+
+  .confirmation-erro-msg {
     font-size: 0.875rem;
+    color: #dc2626;
+    background: #fef2f2;
+    border: 1px solid #fecaca;
+    border-radius: 8px;
+    padding: 0.6rem 1rem;
+    margin-bottom: 1rem;
+    max-width: 100%;
+    word-break: break-word;
+    text-align: left;
   }
-  .resultado-header {
+
+  .btn-details {
+    background: none;
+    border: none;
+    color: #0ea5e9;
+    font-size: 0.9rem;
+    font-weight: 600;
+    cursor: pointer;
     display: flex;
     align-items: center;
-    gap: 0.75rem;
-    margin-bottom: 0.75rem;
+    gap: 0.4rem;
+    margin-bottom: 1rem;
+    font-family: 'Inter', sans-serif;
+    transition: color 0.2s;
   }
-  .resultado-icon { font-size: 1.4rem; }
-  .resultado-header strong { display: block; color: #15803d; font-size: 0.9rem; }
-  .resultado-code { font-size: 0.72rem; color: #86efac; }
+  .btn-details:hover { color: #0284c7; }
+  .btn-details svg { transition: transform 0.2s; }
+  .btn-details svg.rotate { transform: rotate(180deg); }
+
   .resultado-detalhes {
     display: grid;
     grid-template-columns: 1fr 1fr;
     gap: 0.4rem;
   }
+  .resultado-detalhes.expanded {
+    width: 100%;
+    margin-bottom: 1.5rem;
+  }
+
   .detalhe {
-    background: white;
+    background: #f9fafb;
     border-radius: 7px;
     padding: 0.45rem 0.7rem;
-    border: 1px solid #dcfce7;
+    border: 1px solid #e5e7eb;
   }
   .detalhe span {
     display: block;
     font-size: 0.65rem;
-    color: #86efac;
+    color: #6b7280;
     text-transform: uppercase;
     letter-spacing: 0.05em;
     margin-bottom: 0.1rem;
   }
   .detalhe strong {
     font-size: 0.78rem;
-    color: #15803d;
+    color: #111827;
     word-break: break-all;
   }
+  .detalhe.full-width {
+    grid-column: span 2;
+  }
+
+  /* Ações na confirmação */
+  .confirmation-actions {
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+  }
+
+  .btn-retry {
+    width: 100%;
+    padding: 0.75rem;
+    background: white;
+    color: #0ea5e9;
+    border: 1.5px solid #0ea5e9;
+    border-radius: 10px;
+    font-size: 0.9rem;
+    font-weight: 600;
+    font-family: 'Inter', sans-serif;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    transition: background 0.15s, color 0.15s;
+  }
+  .btn-retry:hover {
+    background: #f0f9ff;
+  }
+
+  .btn-continuar {
+    width: 100%;
+    padding: 0.85rem;
+    background: #0ea5e9;
+    color: white;
+    border: none;
+    border-radius: 10px;
+    font-size: 0.975rem;
+    font-weight: 700;
+    font-family: 'Inter', sans-serif;
+    cursor: pointer;
+    transition: background 0.15s, transform 0.1s;
+    letter-spacing: 0.01em;
+  }
+  .btn-continuar:hover { background: #0284c7; transform: translateY(-1px); }
 </style>
