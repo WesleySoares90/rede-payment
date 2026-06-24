@@ -1,5 +1,5 @@
 <script>
-  import { criarTransacao } from "$lib/api-rede.js";
+  import { criarTransacao, criarPix } from "$lib/api-rede.js";
 
   let kind = $state("credit");
   let cardholderName = $state("");
@@ -19,6 +19,12 @@
   let isRecorrente = $state(false);
   let frequencia = $state("Monthly");
   let totalCobrancas = $state(12);
+
+  // Pix
+  let pixData = $state(null); // { qrCodeImage, qrCodeData, tid, ... }
+  let pixLoading = $state(false);
+  let pixErro = $state(null);
+  let pixCopiado = $state(false);
 
   const cartoesTeste = {
     credit:  "4235647728025682",
@@ -164,6 +170,15 @@
     erro = null;
   }
 
+  // Trocar de aba: limpa estado do Pix ao saltar para cartão e vice-versa
+  function selecionarTipo(val) {
+    kind = val;
+    isRecorrente = false;
+    pixData = null;
+    pixErro = null;
+    pixCopiado = false;
+  }
+
   // Timeout helper 
   function comTimeout(promise, ms) {
     const timeout = new Promise((_, reject) =>
@@ -172,7 +187,7 @@
     return Promise.race([promise, timeout]);
   }
 
-  // Pagamento 
+  // Pagamento (cartão) 
   async function pagar() {
     resultado = null;
     erro = null;
@@ -214,6 +229,42 @@
     showDetails = false;
     pagar();
   }
+
+  // Gerar QR Code Pix
+  async function gerarPix() {
+    pixErro = null;
+    pixData = null;
+    pixCopiado = false;
+
+    if (!amountFloat || amountFloat <= 0) {
+      pixErro = "Informe um valor para gerar o Pix.";
+      return;
+    }
+
+    pixLoading = true;
+    try {
+      const resposta = await comTimeout(
+        criarPix({ amount: amountFloat }),
+        7000
+      );
+      pixData = resposta;
+    } catch (e) {
+      pixErro = e.message;
+    } finally {
+      pixLoading = false;
+    }
+  }
+
+  async function copiarCodigoPix() {
+    if (!pixData?.qrCodeResponse?.qrCodeData) return;
+    try {
+      await navigator.clipboard.writeText(pixData.qrCodeResponse.qrCodeData);
+      pixCopiado = true;
+      setTimeout(() => (pixCopiado = false), 2000);
+    } catch (e) {
+      pixErro = "Não foi possível copiar o código.";
+    }
+  }
 </script>
 
 <div class="page">
@@ -241,11 +292,11 @@
     {#if !showConfirmationScreen}
       <!-- Tipo de pagamento -->
       <div class="tipo-tabs">
-        {#each [["credit","Crédito"],["debit","Débito"],["voucher","Voucher"]] as [val, label]}
+        {#each [["credit","Crédito"],["debit","Débito"],["voucher","Voucher"],["pix","Pix"]] as [val, label]}
           <button
             type="button"
             class="tab {kind === val ? 'ativo' : ''}"
-            onclick={() => { kind = val; isRecorrente = false; }}
+            onclick={() => selecionarTipo(val)}
           >{label}</button>
         {/each}
       </div>
@@ -256,105 +307,35 @@
           <div class="total-label">TOTAL A PAGAR</div>
           <div class="total-valor">R$ {amountDisplay || '0,00'}</div>
         </div>
-        <div class="total-right">
-          <div class="total-label">CARTÃO</div>
-          <div class="total-cartao-row">
-            {#if bandeira && logoBandeira[bandeira]}
-              <span class="bandeira-logo">{@html logoBandeira[bandeira]}</span>
-            {/if}
-            <span class="total-cartao">{cardNumber || "•••• •••• •••• ••••"}</span>
-          </div>
-        </div>
-      </div>
-
-      <!-- Formulário -->
-      <form onsubmit={(e) => { e.preventDefault(); pagar(); }}>
-
-        <div class="campo">
-          <label for="numero">Número do cartão</label>
-          <div class="input-icon">
-            <input
-              id="numero"
-              value={cardNumber}
-              oninput={onCardNumberInput}
-              placeholder="0000 0000 0000 0000"
-              maxlength="19"
-              autocomplete="cc-number"
-              inputmode="numeric"
-              required
-            />
-            <span class="icon icon-bandeira">
+        {#if kind !== "pix"}
+          <div class="total-right">
+            <div class="total-label">CARTÃO</div>
+            <div class="total-cartao-row">
               {#if bandeira && logoBandeira[bandeira]}
-                {@html logoBandeira[bandeira]}
-              {:else}
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-                  <rect x="1" y="4" width="22" height="16" rx="2" ry="2"/>
-                  <line x1="1" y1="10" x2="23" y2="10"/>
-                </svg>
+                <span class="bandeira-logo">{@html logoBandeira[bandeira]}</span>
               {/if}
-            </span>
-          </div>
-        </div>
-
-        <div class="campo">
-          <label for="nome">Nome no cartão</label>
-          <input
-            id="nome"
-            value={cardholderName}
-            oninput={onNomeInput}
-            placeholder="Como escrito no cartão"
-            autocomplete="cc-name"
-            required
-          />
-        </div>
-
-        <div class="row-2">
-          <div class="campo">
-            <label for="validade">Validade</label>
-            <input
-              id="validade"
-              value={expirationDisplay}
-              oninput={onExpirationInput}
-              type="text"
-              inputmode="numeric"
-              placeholder="MM/AA"
-              maxlength="5"
-              autocomplete="cc-exp"
-              required
-            />
-          </div>
-          <div class="campo campo-cvv">
-            <label for="cvv">CVV</label>
-            <div class="input-icon">
-              <input
-                id="cvv"
-                value={securityCode}
-                oninput={onCVVInput}
-                type="text"
-                inputmode="numeric"
-                placeholder="•••"
-                maxlength="4"
-                autocomplete="cc-csc"
-                required
-              />
-              <span class="icon">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-                  <circle cx="12" cy="12" r="10"/>
-                  <line x1="12" y1="8" x2="12" y2="12"/>
-                  <line x1="12" y1="16" x2="12.01" y2="16"/>
-                </svg>
-              </span>
+              <span class="total-cartao">{cardNumber || "•••• •••• •••• ••••"}</span>
             </div>
           </div>
-        </div>
+        {:else}
+          <div class="total-right">
+            <div class="total-label">MÉTODO</div>
+            <div class="total-cartao-row">
+              <span class="total-cartao">Pix</span>
+            </div>
+          </div>
+        {/if}
+      </div>
 
-        <div class="row-2">
+      {#if kind === "pix"}
+        <!-- Fluxo Pix -->
+        <div class="pix-flow">
           <div class="campo">
-            <label for="valor">Valor</label>
+            <label for="valor-pix">Valor</label>
             <div class="input-prefix-wrap">
               <span class="input-prefix">R$</span>
               <input
-                id="valor"
+                id="valor-pix"
                 value={amountDisplay}
                 oninput={onAmountInput}
                 type="text"
@@ -362,120 +343,290 @@
                 placeholder="0,00"
                 required
                 class="input-com-prefix"
+                disabled={!!pixData}
               />
             </div>
           </div>
 
-          {#if kind === "credit"}
-            <div class="campo">
-              <label for="parcelas">Parcelas</label>
-              <select
-                id="parcelas"
-                value={installments}
-                onchange={onInstallmentsChange}
-                disabled={isRecorrente}
-                title={isRecorrente ? "Desative a recorrência para parcelar" : ""}
-              >
-                {#each opcoesParcelamento as op}
-                  <option value={op.value}>{op.label}</option>
-                {/each}
-              </select>
-              {#if isRecorrente}
-                <span class="campo-hint">Indisponível com recorrência ativa</span>
+          {#if !pixData}
+            <button
+              type="button"
+              class="btn-pagar"
+              disabled={pixLoading || !amountFloat}
+              onclick={gerarPix}
+            >
+              {#if pixLoading}
+                <span class="spinner"></span> Gerando QR Code...
+              {:else}
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                  <rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/>
+                  <rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/>
+                </svg>
+                Gerar QR Code Pix
               {/if}
+            </button>
+
+            {#if pixErro}
+              <div class="confirmation-erro-msg pix-erro">{pixErro}</div>
+            {/if}
+          {:else}
+            <div class="pix-qrcode-box">
+              {#if pixData.qrCodeResponse?.qrCodeImage}
+                <img
+                  class="pix-qrcode-img"
+                  src="data:image/png;base64,{pixData.qrCodeResponse.qrCodeImage}"
+                  alt="QR Code Pix"
+                />
+              {/if}
+
+              <p class="pix-instrucao">
+                Escaneie o QR Code com o app do seu banco ou copie o código abaixo.
+              </p>
+
+              {#if pixData.qrCodeResponse?.qrCodeData}
+                <button type="button" class="btn-copiar-pix" onclick={copiarCodigoPix}>
+                  {#if pixCopiado}
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                      <polyline points="20 6 9 17 4 12"></polyline>
+                    </svg>
+                    Código copiado!
+                  {:else}
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                      <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                      <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                    </svg>
+                    Copiar código Pix
+                  {/if}
+                </button>
+              {/if}
+
+              {#if pixData.qrCodeResponse?.dateTimeExpiration}
+                <p class="pix-expiracao">
+                  QR Code válido até {new Date(pixData.qrCodeResponse.dateTimeExpiration).toLocaleString("pt-BR")}
+                </p>
+              {/if}
+
+              <button
+                type="button"
+                class="btn-sandbox"
+                onclick={gerarPix}
+              >
+                ⚡ Gerar novo QR Code
+              </button>
             </div>
           {/if}
         </div>
+      {:else}
+        <!-- Formulário de cartão -->
+        <form onsubmit={(e) => { e.preventDefault(); pagar(); }}>
 
-        <!-- Recorrência — só crédito -->
-        {#if kind === "credit"}
-          <div class="recorrencia-row">
-            <div class="recorrencia-row-left">
-              <span class="recorrencia-icon">
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                  <path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"/>
-                </svg>
+          <div class="campo">
+            <label for="numero">Número do cartão</label>
+            <div class="input-icon">
+              <input
+                id="numero"
+                value={cardNumber}
+                oninput={onCardNumberInput}
+                placeholder="0000 0000 0000 0000"
+                maxlength="19"
+                autocomplete="cc-number"
+                inputmode="numeric"
+                required
+              />
+              <span class="icon icon-bandeira">
+                {#if bandeira && logoBandeira[bandeira]}
+                  {@html logoBandeira[bandeira]}
+                {:else}
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                    <rect x="1" y="4" width="22" height="16" rx="2" ry="2"/>
+                    <line x1="1" y1="10" x2="23" y2="10"/>
+                  </svg>
+                {/if}
               </span>
-              <span>Cobrança recorrente</span>
             </div>
-            <label class="toggle-label">
-              <input type="checkbox" checked={isRecorrente} onchange={onRecorrenteChange} />
-              <span class="toggle-slider"></span>
+          </div>
+
+          <div class="campo">
+            <label for="nome">Nome no cartão</label>
+            <input
+              id="nome"
+              value={cardholderName}
+              oninput={onNomeInput}
+              placeholder="Como escrito no cartão"
+              autocomplete="cc-name"
+              required
+            />
+          </div>
+
+          <div class="row-2">
+            <div class="campo">
+              <label for="validade">Validade</label>
+              <input
+                id="validade"
+                value={expirationDisplay}
+                oninput={onExpirationInput}
+                type="text"
+                inputmode="numeric"
+                placeholder="MM/AA"
+                maxlength="5"
+                autocomplete="cc-exp"
+                required
+              />
+            </div>
+            <div class="campo campo-cvv">
+              <label for="cvv">CVV</label>
+              <div class="input-icon">
+                <input
+                  id="cvv"
+                  value={securityCode}
+                  oninput={onCVVInput}
+                  type="text"
+                  inputmode="numeric"
+                  placeholder="•••"
+                  maxlength="4"
+                  autocomplete="cc-csc"
+                  required
+                />
+                <span class="icon">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="12" cy="12" r="10"/>
+                    <line x1="12" y1="8" x2="12" y2="12"/>
+                    <line x1="12" y1="16" x2="12.01" y2="16"/>
+                  </svg>
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <div class="row-2">
+            <div class="campo">
+              <label for="valor">Valor</label>
+              <div class="input-prefix-wrap">
+                <span class="input-prefix">R$</span>
+                <input
+                  id="valor"
+                  value={amountDisplay}
+                  oninput={onAmountInput}
+                  type="text"
+                  inputmode="numeric"
+                  placeholder="0,00"
+                  required
+                  class="input-com-prefix"
+                />
+              </div>
+            </div>
+
+            {#if kind === "credit"}
+              <div class="campo">
+                <label for="parcelas">Parcelas</label>
+                <select
+                  id="parcelas"
+                  value={installments}
+                  onchange={onInstallmentsChange}
+                  disabled={isRecorrente}
+                  title={isRecorrente ? "Desative a recorrência para parcelar" : ""}
+                >
+                  {#each opcoesParcelamento as op}
+                    <option value={op.value}>{op.label}</option>
+                  {/each}
+                </select>
+                {#if isRecorrente}
+                  <span class="campo-hint">Indisponível com recorrência ativa</span>
+                {/if}
+              </div>
+            {/if}
+          </div>
+
+          <!-- Recorrência — só crédito -->
+          {#if kind === "credit"}
+            <div class="recorrencia-row">
+              <div class="recorrencia-row-left">
+                <span class="recorrencia-icon">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"/>
+                  </svg>
+                </span>
+                <span>Cobrança recorrente</span>
+              </div>
+              <label class="toggle-label">
+                <input type="checkbox" checked={isRecorrente} onchange={onRecorrenteChange} />
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+
+            {#if isRecorrente}
+              <div class="recorrencia-box">
+                <div class="row-2">
+                  <div class="campo">
+                    <label for="freq">Frequência</label>
+                    <select id="freq" value={frequencia} onchange={onFrequenciaChange}>
+                      <option value="Daily">Diária</option>
+                      <option value="Weekly">Semanal</option>
+                      <option value="Monthly">Mensal</option>
+                      <option value="Yearly">Anual</option>
+                    </select>
+                  </div>
+                  <div class="campo">
+                    <label for="total">Nº de cobranças</label>
+                    <input
+                      id="total"
+                      value={totalCobrancas}
+                      oninput={onTotalCobrancasInput}
+                      type="number"
+                      min="1"
+                      max="99"
+                      placeholder="12"
+                    />
+                  </div>
+                </div>
+                <p class="recorrencia-info">
+                  💡 Será cobrado <strong>R$ {amountDisplay || '0,00'}</strong> a cada
+                  <strong>{frequencia === "Daily" ? "dia" : frequencia === "Weekly" ? "semana" : frequencia === "Monthly" ? "mês" : "ano"}</strong>,
+                  por <strong>{totalCobrancas} cobranças</strong>.
+                </p>
+              </div>
+            {/if}
+          {/if}
+
+          <!-- Captura automática -->
+          <div class="captura-row">
+            <label class="check-label">
+              <input type="checkbox" checked={capture} onchange={onCaptureChange} />
+              <span>Capturar automaticamente</span>
             </label>
           </div>
 
-          {#if isRecorrente}
-            <div class="recorrencia-box">
-              <div class="row-2">
-                <div class="campo">
-                  <label for="freq">Frequência</label>
-                  <select id="freq" value={frequencia} onchange={onFrequenciaChange}>
-                    <option value="Daily">Diária</option>
-                    <option value="Weekly">Semanal</option>
-                    <option value="Monthly">Mensal</option>
-                    <option value="Yearly">Anual</option>
-                  </select>
-                </div>
-                <div class="campo">
-                  <label for="total">Nº de cobranças</label>
-                  <input
-                    id="total"
-                    value={totalCobrancas}
-                    oninput={onTotalCobrancasInput}
-                    type="number"
-                    min="1"
-                    max="99"
-                    placeholder="12"
-                  />
-                </div>
-              </div>
-              <p class="recorrencia-info">
-                💡 Será cobrado <strong>R$ {amountDisplay || '0,00'}</strong> a cada
-                <strong>{frequencia === "Daily" ? "dia" : frequencia === "Weekly" ? "semana" : frequencia === "Monthly" ? "mês" : "ano"}</strong>,
-                por <strong>{totalCobrancas} cobranças</strong>.
-              </p>
-            </div>
-          {/if}
-        {/if}
+          <!-- Sandbox helper -->
+          <button
+            type="button"
+            class="btn-sandbox"
+            onclick={preencherTeste}
+          >
+            ⚡ Preencher com dados de teste
+          </button>
 
-        <!-- Captura automática -->
-        <div class="captura-row">
-          <label class="check-label">
-            <input type="checkbox" checked={capture} onchange={onCaptureChange} />
-            <span>Capturar automaticamente</span>
-          </label>
-        </div>
+          <button type="submit" class="btn-pagar" disabled={loading}>
+            {#if loading}
+              <span class="spinner"></span> Processando...
+            {:else}
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
+                <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+              </svg>
+              Pagar agora
+            {/if}
+          </button>
 
-        <!-- Sandbox helper -->
-        <button
-          type="button"
-          class="btn-sandbox"
-          onclick={preencherTeste}
-        >
-          ⚡ Preencher com dados de teste
-        </button>
-
-        <button type="submit" class="btn-pagar" disabled={loading}>
-          {#if loading}
-            <span class="spinner"></span> Processando...
-          {:else}
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <div class="rodape-ssl">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
               <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
             </svg>
-            Pagar agora
-          {/if}
-        </button>
+            Transação criptografada via SSL. Dados protegidos.
+          </div>
 
-        <div class="rodape-ssl">
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
-            <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
-          </svg>
-          Transação criptografada via SSL. Dados protegidos.
-        </div>
-
-      </form>
+        </form>
+      {/if}
     {/if}
 
     <!-- Tela de confirmação -->
@@ -643,10 +794,10 @@
   }
   .tab {
     flex: 1;
-    padding: 0.55rem 0.5rem;
+    padding: 0.55rem 0.4rem;
     border: none;
     background: transparent;
-    font-size: 0.875rem;
+    font-size: 0.82rem;
     font-weight: 500;
     color: #6b7280;
     cursor: pointer;
@@ -756,6 +907,11 @@
     border-color: #0ea5e9;
     box-shadow: 0 0 0 3px rgba(14,165,233,0.12);
   }
+  .campo input:disabled {
+    background: #f3f4f6;
+    color: #9ca3af;
+    cursor: not-allowed;
+  }
   .campo select:disabled {
     background: #f3f4f6;
     color: #9ca3af;
@@ -813,6 +969,10 @@
     color: #111827;
     background: white;
     width: 100%;
+  }
+  .input-com-prefix:disabled {
+    background: #f3f4f6;
+    color: #9ca3af;
   }
 
   .input-icon {
@@ -1000,6 +1160,66 @@
     font-size: 0.72rem;
     color: #9ca3af;
     text-align: center;
+  }
+
+  /* Pix */
+  .pix-flow {
+    display: flex;
+    flex-direction: column;
+  }
+  .pix-erro {
+    margin-bottom: 0.5rem;
+  }
+  .pix-qrcode-box {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    border: 1.5px solid #e5e7eb;
+    border-radius: 10px;
+    padding: 1.25rem 1rem;
+    background: #f9fafb;
+  }
+  .pix-qrcode-img {
+    width: 200px;
+    height: 200px;
+    border-radius: 8px;
+    background: white;
+    padding: 8px;
+    border: 1px solid #e5e7eb;
+    margin-bottom: 0.875rem;
+  }
+  .pix-instrucao {
+    font-size: 0.82rem;
+    color: #6b7280;
+    margin: 0 0 0.875rem;
+    line-height: 1.4;
+  }
+  .btn-copiar-pix {
+    width: 100%;
+    padding: 0.7rem;
+    background: white;
+    color: #0ea5e9;
+    border: 1.5px solid #0ea5e9;
+    border-radius: 8px;
+    font-size: 0.85rem;
+    font-weight: 600;
+    font-family: 'Inter', sans-serif;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.45rem;
+    transition: background 0.15s;
+    margin-bottom: 0.75rem;
+  }
+  .btn-copiar-pix:hover {
+    background: #f0f9ff;
+  }
+  .pix-expiracao {
+    font-size: 0.72rem;
+    color: #9ca3af;
+    margin: 0 0 0.75rem;
   }
 
   /* Tela de confirmação */
